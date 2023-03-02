@@ -6,3 +6,11 @@ def build_url(*fragments, **options):
         url += sep
 
     return url
+
+
+def format_currency(value, currency):
+    if currency.upper() == "CHF" and (
+        isinstance(value, float) or isinstance(value, int)
+    ):
+        value = f"CHF {value:_.2f}".replace(".00", ".-").replace("_", "'")
+    return value

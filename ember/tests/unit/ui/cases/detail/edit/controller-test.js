@@ -1,8 +1,6 @@
 import { setupTest } from "ember-qunit";
 import { module, test } from "qunit";
 
-import ENV from "mysagw/config/environment";
-
 module("Unit | Controller | cases/detail/edit", function (hooks) {
   setupTest(hooks);
 

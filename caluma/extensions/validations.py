@@ -1,9 +1,11 @@
 from django.utils import timezone
 from localized_fields.value import LocalizedValue
 from rest_framework import exceptions
+from rest_framework.exceptions import ValidationError
 
 from caluma.caluma_core.validations import BaseValidation, validation_for
-from caluma.caluma_form.schema import SaveDocumentDateAnswer
+from caluma.caluma_form.models import Question
+from caluma.caluma_form.schema import SaveDocumentDateAnswer, SaveTableQuestion
 
 from .settings import settings
 
@@ -28,3 +30,23 @@ class CustomValidation(BaseValidation):
             )
 
         return data
+
+    @validation_for(SaveTableQuestion)
+    def validate_table_summary_config(self, mutation, data, info):
+        summary_question = data["meta"].get("summary-question")
+        summary_mode = data["meta"].get("summary-mode")
+
+        if not summary_question:
+            return data
+
+        if not summary_mode:
+            msg = f'"summary-mode" must be provided when setting "summary-question" for question "{data["slug"]}"'
+            raise ValidationError(msg)
+
+        if summary_mode not in settings.TABLE_SUMMARY_MODES:
+            msg = f'"summary-mode" must be one of {settings.TABLE_SUMMARY_MODES} when setting "summary-question" for question "{data["slug"]}"'
+            raise ValidationError(msg)
+
+        if not Question.objects.filter(slug=summary_question).exists():
+            msg = f'"summary-question" must be a valid slug of an existing question for question "{data["slug"]}"'
+            raise ValidationError(msg)

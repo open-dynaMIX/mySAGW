@@ -1,29 +1,41 @@
+import csv
+import io
+import logging
+
 from django.db import transaction
+from django.db.models.signals import post_save
 
 from caluma.caluma_core.events import on
-
-from django.db.models.signals import post_save
 from caluma.caluma_form import models as caluma_form_models
+
+from ..settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 @on(post_save, sender=caluma_form_models.AnswerDocument, raise_exception=True)
 @transaction.atomic
 def update_table_summary(instance, *args, **kwargs):
-    # TODO deal with updating columns inside already-existing row doc
     question = instance.answer.question
     main_document = instance.answer.document
 
     summary_question = question.meta.get("summary-question")
     summary_mode = question.meta.get("summary-mode")
-    print(f"Updating table summary: tq={instance.answer.question_id}")
 
-    if not summary_question or not summary_mode:
-        print(
-            f"Updating table summary: missing info in TQ meta: sq={summary_question},sm={summary_mode}"
-        )
+    if not summary_question and not summary_mode:
+        # no summary requested
         return
 
-    print(f"Updating table summary: sq={summary_question} mode={summary_mode}")
+    msg = f"Updating table summary: tq={instance.answer.question_id}"
+    logger.debug(msg)
+
+    if not summary_question or not summary_mode:
+        msg = f"Updating table summary: missing info in TQ meta: sq={summary_question},sm={summary_mode}"
+        logger.warning(msg)
+        return
+
+    msg = f"Updating table summary: sq={summary_question} sm={summary_mode}"
+    logger.debug(msg)
 
     summary_answer, _ = caluma_form_models.Answer.objects.get_or_create(
         document=main_document, question_id=summary_question
@@ -33,6 +45,8 @@ def update_table_summary(instance, *args, **kwargs):
 
     summary_func = summary_modes.get(summary_mode)
     if not summary_func:
+        msg = f'Updating table summary: summary mode "{summary_mode}" does not exist. Must be one of {settings.TABLE_SUMMARY_MODES}'
+        logger.warning(msg)
         return
 
     summary_answer.value = summary_func(instance.answer)
@@ -49,33 +63,46 @@ def update_table_summary_from_row(instance, *args, **kwargs):
         return
 
     # AnswerDocument available, we're in a table
-    # Trigger by just saving the answerdocument
+    # Trigger by just saving the AnswerDocument
     ad.save()
 
 
 def _make_csv_summary(table_answer):
-    print(f"Making CSV summary for {table_answer.question}")
-    cols = []
-    rows = []
+    def get_lines(answer_docs, row_questions):
+        for ad in answer_docs:
+            result = {}
+            for question in row_questions:
+                try:
+                    answer = ad.document.answers.get(question=question).value
+                except caluma_form_models.Answer.DoesNotExist:
+                    answer = ""
+                result[question.slug] = answer
+            yield result
+
+    msg = f"Making CSV summary for {table_answer.question}"
+    logger.debug(msg)
     answer_docs = caluma_form_models.AnswerDocument.objects.filter(
         answer=table_answer
     ).order_by("-sort")
-    for ad in answer_docs:
-        cols = _sorted_form_questions(ad.document.form, cols)
-        answers = {
-            ans.question_id: ans.value
-            for ans in ad.document.answers.filter(question__in=cols)
-        }
-        values = "; ".join([answers.get(col.slug, "") for col in cols])
-        rows.append(values)
+    row_questions = _sorted_form_questions(table_answer.question.row_form)
 
-    result = "\n".join(rows)
-    print(f"Making CSV summary for {table_answer.question}: result={result}")
+    with io.StringIO() as csvfile:
+        writer = csv.DictWriter(
+            csvfile,
+            fieldnames=[q.slug for q in row_questions],
+            delimiter=";",
+            quoting=csv.QUOTE_MINIMAL,
+        )
+        writer.writeheader()
+        for line in get_lines(answer_docs, row_questions):
+            writer.writerow(line)
+
+        result = csvfile.getvalue()
+    msg = f"Making CSV summary for {table_answer.question}: result={result}"
+    logger.debug(msg)
     return result
 
 
-def _sorted_form_questions(form, previous_val):
-    if previous_val:
-        return previous_val
+def _sorted_form_questions(form):
     fqs = caluma_form_models.FormQuestion.objects.filter(form=form).order_by("-sort")
     return [fq.question for fq in fqs]
